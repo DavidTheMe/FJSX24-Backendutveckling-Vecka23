@@ -1,0 +1,43 @@
+.green-box {
+  background-color: #4CAF50;
+  color: white;
+  padding: 2rem 3rem;
+  margin: 2rem 3rem;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+
+.green-box-board {
+  background-color: #4CAF50;
+  color: white;
+  padding: 2rem 3rem;
+  margin: 2rem 3rem;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+
+.description-box {
+  background-color: #ffffff;
+  color: rgb(0, 0, 0);
+  padding: 1rem 1rem;
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+
+.centered {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.error-text{
+  color: rgb(255, 145, 0);
+}
+
+.board-form-error-text{
+  color: rgb(255, 145, 0);
+}

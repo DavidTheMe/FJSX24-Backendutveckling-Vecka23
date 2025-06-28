@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notes App Log-in</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <div>
+        <h1 class="error-text"></h1>
+        <h1 class="success-text">Loading...</h1>
+        <h2 class="boards-loading-text"></h2>
+
+        <button onclick="showBoardForm()">Create board</button>
+        <button onclick="logout()">Log out</button>
+        <button>Delete account</button>
+
+        <div class="board-form">
+            <div class="green-box">
+                <h2>Create new board:</h2>
+                <p>Board name:</p>
+                <input class="name-input">
+                <p>Description:</p>
+                <input class="description-input">
+                <p class="board-form-error-text"></p>
+                <button onclick="tryCreatingBoard()">Create</button>
+            </div>
+        </div>
+    </div>
+    <script src="boardsController.js"></script>
+</body>
+
+</html>
