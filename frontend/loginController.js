@@ -46,6 +46,7 @@ async function tryLogin() {
         const data = await response.json();
         console.log(data.accessToken);
         localStorage.setItem('token', data.accessToken);
+        localStorage.setItem('refreshToken', data.refreshToken);
         console.log(localStorage.getItem('token'));
         login();
 

@@ -12,7 +12,7 @@ const getUsers = (req, res) => {
     }
     res.status(200).json(results.rows);
   })
-}
+};
 
 const getUserByName = (req, res) => {
   const username = req.params.username;
@@ -25,29 +25,46 @@ const getUserByName = (req, res) => {
   });
 };
 
-const createAccount = (req, res) => {
-  const { username, password } = req.body;
-
-  pool.query(queries.getUsers, (error, results) => {
-
-    if (error) {
-      return res.status(500).send("Database error");
-    }
-
-    //Add account to db
+const createAccount = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { username, password } = req.body;
     const currentTime = new Date();
 
-    pool.query(queries.registerNewUser, [username, password, currentTime], (error, results) => {
-      if (error) throw error;
-      res.status(201).send("Account created!");
-      console.log("Account created!");
-    })
+    await client.query("BEGIN");
 
-  });
+    // Create user
+    const userResult = await client.query(
+      queries.registerNewUser,
+      [username, password, currentTime]
+    );
+
+    const userId = userResult.rows[0].id;
+
+    // Create refresh token entry
+    await client.query(
+      queries.createRefreshTokenEntry,
+      [userId]
+    );
+
+    await client.query("COMMIT");
+
+    console.log("Account and refresh token created!");
+
+    res.status(201).json({
+      message: "Account created!",
+      refreshToken: "",
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Error during account creation:", error);
+    res.status(500).json({ error: "Failed to create account" });
+  } finally {
+    client.release();
+  }
 };
 
 const login = (req, res) => {
-
   const username = req.params.username;
   const { password } = req.body;
 
@@ -57,37 +74,117 @@ const login = (req, res) => {
       return res.status(500).json({ message: "Database error" });
     }
 
-    // Check if user exists
     const user = results.rows.find(user => user.username === username);
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Check password
     if (user.password !== password) {
       return res.status(401).json({ message: "Incorrect password" });
     }
 
-    //Token
-    const accessToken = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET);
-    res.json({ accessToken: accessToken });
+    // Generate tokens
+    const accessToken = generateAccessToken(user);
+    const refreshToken = jwt.sign(user, process.env.REFRESH_TOKEN_SECRET);
 
-    // Success
-    //return res.status(200).json({ message: "Login successful" });
+    // Update refresh token in DB
+    pool.query(
+      queries.updateRefreshToken, // e.g. "UPDATE refreshtokens SET refreshtoken = $1 WHERE user_id = $2"
+      [refreshToken, user.id],
+      (error, results) => {
+        if (error) {
+          console.error("Error updating refresh token:", error);
+          return res.status(500).json({ message: "Database error while updating refresh token" });
+        }
+
+        res.json({ accessToken, refreshToken });
+      }
+    );
   });
 };
 
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.sendStatus(401);
+async function authenticateToken(req, res, next) {
+  try {
+    const authHeader = req.headers['authorization'];
+    const accessToken = authHeader && authHeader.split(' ')[1];
+    if (!accessToken) {
+      console.log("No access token provided");
+      return res.sendStatus(401);
+    }
 
-  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
-    req.user = user;  // assume user object has id field
-    next();
-  });
+    jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET, async (err, user) => {
+      if (!err) {
+        console.log("Access token verified successfully");
+        req.user = user;
+        return next();
+      }
+
+      if (err.name !== 'TokenExpiredError') {
+        console.log("Access token invalid:", err.message);
+        return res.sendStatus(403);
+      }
+
+      // Token expired - decode without verifying signature to get user ID
+      const decodedAccess = jwt.decode(accessToken);
+      if (!decodedAccess || !decodedAccess.id) {
+        console.log("Failed to decode access token or no id in token");
+        return res.sendStatus(401);
+      }
+
+      const refreshToken = req.headers['refresh-token'];
+      if (!refreshToken) {
+        console.log("No refresh token provided");
+        return res.sendStatus(401);
+      }
+
+      try {
+        // Get stored refresh token from DB by user ID
+        const { rows } = await pool.query(queries.getRefreshToken, [decodedAccess.id]);
+        if (!rows.length) {
+          console.log("No refresh token found in DB for user:", decodedAccess.id);
+          return res.sendStatus(403);
+        }
+
+        const storedRefreshToken = rows[0].refreshtoken;
+        if (storedRefreshToken !== refreshToken) {
+          console.log("Provided refresh token does not match stored token");
+          return res.sendStatus(403);
+        }
+
+        // Verify the refresh token itself
+        jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (refreshErr, refreshUser) => {
+          if (refreshErr) {
+            console.log("Refresh token invalid:", refreshErr.message);
+            return res.sendStatus(403);
+          }
+
+          console.log("Refresh token verified successfully");
+
+          // Generate new access token
+          const newAccessToken = generateAccessToken(refreshUser);
+
+          console.log("New access token generated from refresh token");
+          res.setHeader('new-access-token', newAccessToken);
+
+          req.user = refreshUser;
+          next();
+        });
+
+      } catch (dbErr) {
+        console.error("Database error:", dbErr);
+        return res.status(500).send("Database error");
+      }
+    });
+
+  } catch (error) {
+    console.error("Unexpected error in authenticateToken:", error);
+    res.sendStatus(500);
+  }
+};
+
+function generateAccessToken(user) {
+  return jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '15s' })
 }
 
 const getUserBoards = (req, res) => {
@@ -150,122 +247,23 @@ const deleteBoard = (req, res) => {
   );
 };
 
-/*
-const getNotesInBoard = (req, res) => {
-    pool.query(queries.getNotesInBoard, (error, results) => {
-        if (error) {
-            throw error;
-        }
-        res.status(200).json(results.rows);
-    })
-}
+const deleteUser = (req, res) => {
+  const userId = req.params.id;
 
-const getNoteById = (req, res) => {
-    const id = parseInt(req.params.id);
-    pool.query(queries.getNoteById, [id], (error, results) => {
-        if (error) throw error;
-        res.status(200).json(results.rows)
-    });
-}
+  pool.query(
+    queries.deleteUser,
+    [userId],
+    (error, results) => {
+      if (error) {
+        console.error("Database error:", error);
+        return res.status(500).json({ error: "An error occurred while deleting the user." });
+      }
 
-const addNote = (req, res) => {
-    const { title, artist, releaseDate, length } = req.body;
-
-    pool.query(queries.getNotesByTitle, [title], (error, results) => {
-
-        if (error) {
-            return res.status(500).send("Database error");
-        }
-
-        //Add note to db
-        pool.query(queries.addnote, [title, artist, releaseDate, length], (error, results) => {
-            if (error) throw error;
-            res.status(201).send("Note created!");
-            console.log("Note created!");
-        })
-
-    });
-};
-
-const removeNoteById = (req, res) => {
-    const id = parseInt(req.params.id);
-
-    pool.query(queries.getNoteById, [id], (error, results) => {
-        if (error) {
-            console.error(error);
-            return res.status(500).send("Server error");
-        }
-
-        if (results.rowCount === 0) {
-            return res.status(404).send("Note not found");
-        }
-
-        pool.query(queries.removeNoteById, [id], (error, results) => {
-            if (error) {
-                console.error(error);
-                return res.status(500).send("Server error");
-            }
-
-            res.status(200).send("Note successfully deleted");
-        });
-    });
-};
-
-const updateNoteById = (req, res) => {
-  const id = parseInt(req.params.id);
-  const { title, artist, releaseDate, length } = req.body;
-
-  // Build the fields to update dynamically
-  const fields = [];
-  const values = [];
-  let idx = 1;
-
-  if (title !== undefined) {
-    fields.push(`title = $${idx++}`);
-    values.push(title);
-  }
-  if (artist !== undefined) {
-    fields.push(`artist = $${idx++}`);
-    values.push(artist);
-  }
-  if (releaseDate !== undefined) {
-    fields.push(`releaseDate = $${idx++}`);
-    values.push(releaseDate);
-  }
-  if (length !== undefined) {
-    fields.push(`length = $${idx++}`);
-    values.push(length);
-  }
-
-  if (fields.length === 0) {
-    return res.status(400).send("No fields provided for update.");
-  }
-
-  // Add the id as the last parameter
-  values.push(id);
-
-  const query = `
-    UPDATE notes
-    SET ${fields.join(", ")}
-    WHERE id = $${idx}
-    RETURNING *;
-  `;
-
-  pool.query(query, values, (error, results) => {
-    if (error) {
-      console.error(error);
-      return res.status(500).send("Server error");
+      console.log("User deleted!");
+      res.status(200).json({ message: "User deleted successfully." });
     }
-
-    if (results.rowCount === 0) {
-      return res.status(404).send("Album not found");
-    }
-
-    const updatedFields = Object.keys(req.body).filter(key => req.body[key] !== undefined);
-    res.send(`Updated fields: ${updatedFields.join(", ")}`);
-  });
+  );
 };
-*/
 
 
 
@@ -279,4 +277,5 @@ module.exports = {
   authenticateToken,
   createBoard,
   deleteBoard,
+  deleteUser,
 }

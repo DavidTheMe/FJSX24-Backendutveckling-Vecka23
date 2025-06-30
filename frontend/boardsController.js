@@ -10,59 +10,53 @@ let userId = "";
 getBoards();
 hideBoardForm();
 
-async function getBoards() {
-    const token = localStorage.getItem('token');
 
-    if (!token) {
-        errorText.textContent = "No token found. Please log in.";
-        successText.textContent = '';
-        return;
+async function getBoards(retry = true) {
+  const token = localStorage.getItem('token');
+  const refreshToken = localStorage.getItem('refreshToken');
+
+  try {
+    const response = await fetch("http://localhost:7000/boards", {
+      method: "GET",
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'refresh-token': refreshToken
+      }
+    });
+
+    if (!response.ok) {
+      let errorData = {};
+      try {
+        errorData = await response.json();
+      } catch {}
+      errorText.textContent = "Error fetching boards: " + (errorData.message || response.statusText);
+      successText.textContent = '';
+      return;
     }
 
-    let data; // declare here to avoid "undefined" later
+    const newAccessToken = response.headers.get('new-access-token');
+    updateRefreshTokenIfNeeded(newAccessToken);
 
-    try {
-        const response = await fetch("http://localhost:7000/boards", {
-            method: "GET",
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+    const data = await response.json();
 
-        if (!response.ok) {
-            let errorData = {};
-            try {
-                errorData = await response.json();
-            } catch {
-                // response not json, ignore
-            }
-            errorText.textContent = "Error fetching boards: " + (errorData.message || response.statusText);
-            successText.textContent = '';
-            return;
-        }
+    username = data.user?.username || "(unknown user)";
+    userId = data.user?.id;
 
-        data = await response.json();
-        console.log("Boards data:", data);
-
-        // Always set userId if possible
-        username = data.user?.username || "(unknown user)";
-        userId = data.user?.id;
-
-        if (!data.boards) {
-            errorText.textContent = "No boards data found.";
-            successText.textContent = '';
-            return;
-        }
-
-        successText.textContent = 'You are logged in as ' + username;
-
-        renderBoards(data.boards);
-
-    } catch (error) {
-        console.error("Network or parsing error:", error);
-        errorText.textContent = "Network error: " + error.message;
-        successText.textContent = '';
+    if (!data.boards) {
+      errorText.textContent = "No boards data found.";
+      successText.textContent = '';
+      return;
     }
+
+    successText.textContent = 'You are logged in as ' + username;
+
+    renderBoards(data.boards);
+
+  } catch (error) {
+    console.error("Network or parsing error:", error);
+    errorText.textContent = "Network error: " + error.message;
+    successText.textContent = '';
+  }
 }
 
 function renderBoards(boards) {
@@ -136,12 +130,13 @@ function tryCreatingBoard() {
     }
     else {
         const token = localStorage.getItem('token');
-        createBoard(token, userId, nameInput.value, descriptionInput.value);
+        const refreshToken = localStorage.getItem('refreshToken');
+        createBoard(token, refreshToken, userId, nameInput.value, descriptionInput.value);
     }
 
 }
 
-async function createBoard(token, ownerId, name, description) {
+async function createBoard(token, refreshToken, ownerId, name, description) {
     boardFormErrorText.textContent = "Loading...";
 
     try {
@@ -149,7 +144,8 @@ async function createBoard(token, ownerId, name, description) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
+                'Authorization': `Bearer ${token}`,
+                'refresh-token': refreshToken
             },
             body: JSON.stringify({
                 "ownerId": ownerId,
@@ -174,9 +170,10 @@ async function createBoard(token, ownerId, name, description) {
         }
 
         // Success
-        boardFormErrorText.textContent = "Board created successfully.";
         hideBoardForm();
+        updateRefreshTokenIfNeeded(response.headers.get('new-access-token'));
         getBoards();
+        boardFormErrorText.textContent = "Board created successfully.";
     } catch (error) {
         boardFormErrorText.textContent = "Network error: Could not create board.";
         console.error('Network or unexpected error:', error);
@@ -186,6 +183,7 @@ async function createBoard(token, ownerId, name, description) {
 async function deleteBoard(boardId) {
     successText.textContent = "Loading...";
     const token = localStorage.getItem('token');
+    const refreshToken = localStorage.getItem('refreshToken');
 
     console.log(boardId);
 
@@ -194,7 +192,8 @@ async function deleteBoard(boardId) {
             method: 'DELETE',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
+                'Authorization': `Bearer ${token}`,
+                'refresh-token': refreshToken
             },
             body: JSON.stringify({
                 "id": boardId,
@@ -219,8 +218,9 @@ async function deleteBoard(boardId) {
         }
 
         // Success
-        successText.textContent = "";
+        updateRefreshTokenIfNeeded(response.headers.get('new-access-token'));
         getBoards();
+        successText.textContent = "";
     } catch (error) {
         successText.textContent = "";
         errorText.textContent = "Network error: Could not delete board.";
@@ -229,6 +229,55 @@ async function deleteBoard(boardId) {
     getBoards();
 }
 
-function logout(){
+function logout() {
     window.location = "login.html";
+}
+
+async function deleteAccount() {
+    successText.textContent = "Loading...";
+
+    console.log(userId);
+
+    const token = localStorage.getItem('token');
+    const refreshToken = localStorage.getItem('refreshToken');
+
+    try {
+        const response = await fetch(`http://localhost:7000/users/${userId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'refresh-token': refreshToken
+            }
+        });
+
+        // Try parsing JSON safely
+        let data = null;
+        try {
+            data = await response.json();
+        } catch (jsonError) {
+            successText.textContent = "";
+        }
+
+        if (!response.ok) {
+            const errorMessage = data?.error || `HTTP error ${response.status}`;
+            errorText.textContent = errorMessage;
+            successText.textContent = "";
+            console.error('Server responded with error:', errorMessage);
+            return;
+        }
+
+        // Success
+        logout();
+    } catch (error) {
+        successText.textContent = "";
+        errorText.textContent = "Network error: Could not delete user.";
+        console.error('Network or unexpected error:', error);
+    }
+}
+
+function updateRefreshTokenIfNeeded(newAccessToken) {
+    if (newAccessToken) {
+        console.log("Received new access token from server");
+        localStorage.setItem('token', newAccessToken);
+    }
 }
