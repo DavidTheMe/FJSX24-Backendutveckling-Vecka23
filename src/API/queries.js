@@ -19,8 +19,8 @@ const registerNewUser = "INSERT INTO notesapp.users (username, password, created
 const deleteUser = "DELETE FROM notesapp.users WHERE id = $1";
 
 //authentication
-const createRefreshTokenEntry = "INSERT INTO notesapp.refreshtokens (userId) VALUES ($1)"
-const updateRefreshToken = 'UPDATE notesapp.refreshtokens SET refreshToken = $1 WHERE userId = $2';
+const createAccessTokenEntry = "INSERT INTO notesapp.accesstokens (ownerId) VALUES ($1)"
+const updateAccessToken = 'UPDATE notesapp.accesstokens SET accesstokens = $1 WHERE userId = $2';
 const getRefreshToken = 'SELECT refreshtoken FROM notesapp.refreshtokens WHERE userId = $1';
 
 
@@ -43,7 +43,7 @@ module.exports = {
     registerNewUser,
     deleteUser,
 
-    createRefreshTokenEntry,
-    updateRefreshToken,
+    createAccessTokenEntry,
+    updateAccessToken,
     getRefreshToken,
 };

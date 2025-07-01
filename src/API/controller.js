@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const pool = require('../../db')
 const queries = require('./queries');
+const client = require('../../db');
 
 const jwt = require('jsonwebtoken');
 
@@ -26,43 +27,56 @@ const getUserByName = (req, res) => {
 };
 
 const createAccount = async (req, res) => {
-  const client = await pool.connect();
+  const clientConn = await client.connect();  // get a client from the pool for transaction
   try {
     const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+
+    // Check if username already exists
+    const existingUser = await clientConn.query(queries.getUserByUsername,
+      [username]
+    );
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+
+    await clientConn.query('BEGIN'); // Start transaction
+
     const currentTime = new Date();
 
-    await client.query("BEGIN");
-
     // Create user
-    const userResult = await client.query(
+    const userResult = await clientConn.query(
       queries.registerNewUser,
       [username, password, currentTime]
     );
 
     const userId = userResult.rows[0].id;
 
-    // Create refresh token entry
-    await client.query(
-      queries.createRefreshTokenEntry,
+    // Create access token entry
+    await clientConn.query(
+      queries.createAccessTokenEntry,
       [userId]
     );
 
-    await client.query("COMMIT");
+    await clientConn.query('COMMIT'); // Commit transaction
 
-    console.log("Account and refresh token created!");
+    console.log("Account and access token table entry created!");
 
-    res.status(201).json({
+    res.status(200).json({
       message: "Account created!",
-      refreshToken: "",
+      userId,
     });
   } catch (error) {
-    await client.query("ROLLBACK");
+    await clientConn.query('ROLLBACK'); // Roll back transaction on error
     console.error("Error during account creation:", error);
     res.status(500).json({ error: "Failed to create account" });
   } finally {
-    client.release();
+    clientConn.release(); // release client back to the pool
   }
 };
+
 
 const login = (req, res) => {
   const username = req.params.username;
@@ -81,106 +95,51 @@ const login = (req, res) => {
     }
 
     if (user.password !== password) {
-      return res.status(401).json({ message: "Incorrect password" });
+      return res.status(400).json({ message: "Incorrect password" });
     }
 
     // Generate tokens
     const accessToken = generateAccessToken(user);
-    const refreshToken = jwt.sign(user, process.env.REFRESH_TOKEN_SECRET);
 
-    // Update refresh token in DB
+    console.log("Logging in")
+    console.log("Access token: " + accessToken);
+
+    // Update token in DB
     pool.query(
-      queries.updateRefreshToken, // e.g. "UPDATE refreshtokens SET refreshtoken = $1 WHERE user_id = $2"
-      [refreshToken, user.id],
+      queries.updateAccessToken,
+      [accessToken, user.id],
       (error, results) => {
         if (error) {
           console.error("Error updating refresh token:", error);
           return res.status(500).json({ message: "Database error while updating refresh token" });
         }
 
-        res.json({ accessToken, refreshToken });
+        res.json({ accessToken });
       }
     );
+
+
+    return res.status(200).json({ "Successful login!": accessToken });
+
+
   });
 };
 
 async function authenticateToken(req, res, next) {
-  try {
-    const authHeader = req.headers['authorization'];
-    const accessToken = authHeader && authHeader.split(' ')[1];
-    if (!accessToken) {
-      console.log("No access token provided");
-      return res.sendStatus(401);
+
+  pool.query(
+    queries.updateAccessToken,
+    [refreshToken, user.id],
+    (error, results) => {
+      if (error) {
+        console.error("Error updating refresh token:", error);
+        return res.status(500).json({ message: "Database error while updating refresh token" });
+      }
+
+      res.json({ accessToken, refreshToken });
     }
+  );
 
-    jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET, async (err, user) => {
-      if (!err) {
-        console.log("Access token verified successfully");
-        req.user = user;
-        return next();
-      }
-
-      if (err.name !== 'TokenExpiredError') {
-        console.log("Access token invalid:", err.message);
-        return res.sendStatus(403);
-      }
-
-      // Token expired - decode without verifying signature to get user ID
-      const decodedAccess = jwt.decode(accessToken);
-      if (!decodedAccess || !decodedAccess.id) {
-        console.log("Failed to decode access token or no id in token");
-        return res.sendStatus(401);
-      }
-
-      const refreshToken = req.headers['refresh-token'];
-      if (!refreshToken) {
-        console.log("No refresh token provided");
-        return res.sendStatus(401);
-      }
-
-      try {
-        // Get stored refresh token from DB by user ID
-        const { rows } = await pool.query(queries.getRefreshToken, [decodedAccess.id]);
-        if (!rows.length) {
-          console.log("No refresh token found in DB for user:", decodedAccess.id);
-          return res.sendStatus(403);
-        }
-
-        const storedRefreshToken = rows[0].refreshtoken;
-        if (storedRefreshToken !== refreshToken) {
-          console.log("Provided refresh token does not match stored token");
-          return res.sendStatus(403);
-        }
-
-        // Verify the refresh token itself
-        jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (refreshErr, refreshUser) => {
-          if (refreshErr) {
-            console.log("Refresh token invalid:", refreshErr.message);
-            return res.sendStatus(403);
-          }
-
-          console.log("Refresh token verified successfully");
-
-          // Generate new access token
-          const newAccessToken = generateAccessToken(refreshUser);
-
-          console.log("New access token generated from refresh token");
-          res.setHeader('new-access-token', newAccessToken);
-
-          req.user = refreshUser;
-          next();
-        });
-
-      } catch (dbErr) {
-        console.error("Database error:", dbErr);
-        return res.status(500).send("Database error");
-      }
-    });
-
-  } catch (error) {
-    console.error("Unexpected error in authenticateToken:", error);
-    res.sendStatus(500);
-  }
 };
 
 function generateAccessToken(user) {
@@ -264,9 +223,6 @@ const deleteUser = (req, res) => {
     }
   );
 };
-
-
-
 
 module.exports = {
   createAccount,

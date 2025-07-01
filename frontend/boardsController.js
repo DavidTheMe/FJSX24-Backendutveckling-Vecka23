@@ -276,7 +276,7 @@ async function deleteAccount() {
 }
 
 function updateRefreshTokenIfNeeded(newAccessToken) {
-    if (newAccessToken) {
+    if (newAccessToken != null) {
         console.log("Received new access token from server");
         localStorage.setItem('token', newAccessToken);
     }
