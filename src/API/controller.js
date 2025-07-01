@@ -1,11 +1,11 @@
 require('dotenv').config();
-
-const pool = require('../../db')
+const bcrypt = require('bcrypt');
+const pool = require('../../db');
 const queries = require('./queries');
 const client = require('../../db');
-
 const jwt = require('jsonwebtoken');
 
+const SALT_ROUNDS = 10;  // bcrypt salt rounds
 
 const getUsers = (req, res) => {
   pool.query(queries.getUsers, (error, results) => {
@@ -13,7 +13,7 @@ const getUsers = (req, res) => {
       throw error;
     }
     res.status(200).json(results.rows);
-  })
+  });
 };
 
 const getUserByName = (req, res) => {
@@ -23,12 +23,12 @@ const getUserByName = (req, res) => {
       console.error(error);
       return res.status(500).send("Database error");
     }
-    res.status(200).json(results.rows);  // Note: returns an array (empty if no user)
+    res.status(200).json(results.rows);
   });
 };
 
 const createAccount = async (req, res) => {
-  const clientConn = await client.connect();  // get a client from the pool for transaction
+  const clientConn = await client.connect();
   try {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -36,21 +36,22 @@ const createAccount = async (req, res) => {
     }
 
     // Check if username already exists
-    const existingUser = await clientConn.query(queries.getUserByUsername,
-      [username]
-    );
+    const existingUser = await clientConn.query(queries.getUserByUsername, [username]);
     if (existingUser.rows.length > 0) {
       return res.status(409).json({ error: 'Username already exists' });
     }
 
-    await clientConn.query('BEGIN'); // Start transaction
+    await clientConn.query('BEGIN');
 
     const currentTime = new Date();
 
-    // Create user
+    // Hash the password before storing
+    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
+    // Create user with hashed password
     const userResult = await clientConn.query(
       queries.registerNewUser,
-      [username, password, currentTime]
+      [username, hashedPassword, currentTime]
     );
 
     const userId = userResult.rows[0].id;
@@ -61,7 +62,7 @@ const createAccount = async (req, res) => {
       [userId]
     );
 
-    await clientConn.query('COMMIT'); // Commit transaction
+    await clientConn.query('COMMIT');
 
     console.log("Account and access token table entry created!");
 
@@ -70,11 +71,11 @@ const createAccount = async (req, res) => {
       userId,
     });
   } catch (error) {
-    await clientConn.query('ROLLBACK'); // Roll back transaction on error
+    await clientConn.query('ROLLBACK');
     console.error("Error during account creation:", error);
     res.status(500).json({ error: "Failed to create account" });
   } finally {
-    clientConn.release(); // release client back to the pool
+    clientConn.release();
   }
 };
 
@@ -82,24 +83,27 @@ const login = (req, res) => {
   const username = req.params.username;
   const { password } = req.body;
 
-  pool.query(queries.getUsers, (error, results) => {
+  pool.query(queries.getUserByUsername, [username], async (error, results) => {
     if (error) {
       console.error(error);
       return res.status(500).json({ message: "Database error" });
     }
 
-    const user = results.rows.find(user => user.username === username);
-
-    if (!user) {
+    if (results.rows.length === 0) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    if (user.password !== password) {
+    const user = results.rows[0];
+
+    // Compare password using bcrypt
+    const passwordMatch = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatch) {
       return res.status(400).json({ message: "Incorrect password" });
     }
 
-    // Generate tokens
-    const accessToken = generateAccessToken(user);
+    // Generate access token
+    const accessToken = generateAccessToken({ id: user.id, username: user.username });
 
     // Update token in DB
     pool.query(
@@ -110,7 +114,6 @@ const login = (req, res) => {
           console.error("Error updating refresh token:", error);
           return res.status(500).json({ message: "Database error while updating refresh token" });
         }
-        // Only send success response after token update succeeded
         return res.status(200).json({ "Successful login!": accessToken });
       }
     );
@@ -126,11 +129,11 @@ async function authenticateToken(req, res, next) {
       return res.status(401).json({ message: "Access token required" });
     }
 
-    // Check if it's valid (not expired)
     jwt.verify(tokenFromHeader, process.env.ACCESS_TOKEN_SECRET, (err, decodedUser) => {
       if (!err) {
-        // Valid token
         const userId = decodedUser.id;
+        req.userId = userId;
+
         pool.query(queries.getAccessToken, [userId], (dbErr, results) => {
           if (dbErr) {
             console.error("Database error while checking access token:", dbErr);
@@ -151,15 +154,14 @@ async function authenticateToken(req, res, next) {
           next();
         });
       } else if (err.name === "TokenExpiredError") {
-        // Expired token: decode to get userId
         const decoded = jwt.decode(tokenFromHeader);
         if (!decoded || !decoded.id) {
           return res.status(400).json({ message: "Invalid token payload" });
         }
 
         const userId = decoded.id;
+        req.userId = userId;
 
-        // Retrieve token in DB and verify it matches (single-use renewal)
         pool.query(queries.getAccessToken, [userId], (dbErr, results) => {
           if (dbErr) {
             console.error("Database error while checking access token:", dbErr);
@@ -176,10 +178,8 @@ async function authenticateToken(req, res, next) {
             return res.status(403).json({ message: "Expired token mismatch or already used" });
           }
 
-          // Generate new token
           const newToken = generateAccessToken({ id: userId });
 
-          // Update DB with new token
           pool.query(
             queries.updateAccessToken,
             [newToken, userId],
@@ -209,9 +209,8 @@ async function authenticateToken(req, res, next) {
   }
 }
 
-
 function generateAccessToken(user) {
-  return jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '15s' })
+  return jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '200s' });
 }
 
 const getUserBoards = (req, res) => {
@@ -221,7 +220,6 @@ const getUserBoards = (req, res) => {
     return res.status(400).json({ message: "User ID is required" });
   }
 
-  //Verify user exists
   pool.query(queries.getUserById, [userId], (error, userResults) => {
     if (error) {
       console.error("Error checking user existence:", error);
@@ -232,7 +230,6 @@ const getUserBoards = (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    //Get boards
     pool.query(queries.getUserBoards, [userId], (error, boardResults) => {
       if (error) {
         console.error("Error retrieving user boards:", error);
@@ -246,12 +243,16 @@ const getUserBoards = (req, res) => {
   });
 };
 
-
 const createBoard = (req, res) => {
   const { ownerId, name, description } = req.body;
 
   if (ownerId == null || name == null || description == null) {
     return res.status(400).json({ error: "All values must be provided: ownerId, name, description." });
+  }
+
+  // Check if the logged-in user matches the ownerId
+  if (req.userId !== ownerId) {
+    return res.status(403).json({ error: "You can only create boards for your own user account." });
   }
 
   const currentTime = new Date();
@@ -271,26 +272,90 @@ const createBoard = (req, res) => {
   );
 };
 
+
+const editBoard = (req, res) => {
+  const { id, name, description } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ error: "Board id is required." });
+  }
+
+  pool.query(queries.getBoardById, [id], (error, results) => {
+    if (error) {
+      console.error("Database error fetching board:", error);
+      return res.status(500).json({ error: "Database error while fetching board." });
+    }
+
+    if (results.rows.length === 0) {
+      return res.status(404).json({ error: "Board not found." });
+    }
+
+    const currentBoard = results.rows[0];
+
+    if (currentBoard.ownerid !== req.userId) {
+      return res.status(403).json({ error: "You are not authorized to edit this board." });
+    }
+
+    const updatedName = name !== undefined ? name : currentBoard.name;
+    const updatedDescription = description !== undefined ? description : currentBoard.description;
+
+    pool.query(
+      queries.updateBoard,
+      [updatedName, updatedDescription, id],
+      (updateError, updateResults) => {
+        if (updateError) {
+          console.error("Database error updating board:", updateError);
+          return res.status(500).json({ error: "Error updating board." });
+        }
+
+        if (updateResults.rowCount === 0) {
+          return res.status(404).json({ error: "Board not found during update." });
+        }
+
+        console.log("Board updated!");
+        res.status(200).json({ message: "Board updated successfully." });
+      }
+    );
+  });
+};
+
 const deleteBoard = (req, res) => {
   const { id } = req.body;
 
-  if (id == null) {
-    return res.status(400).json({ error: "All values must be provided: ownerId, name, description." });
+  if (!id) {
+    return res.status(400).json({ error: "Board id must be provided." });
   }
 
-  pool.query(
-    queries.deleteBoard,
-    [id],
-    (error, results) => {
-      if (error) {
-        console.error("Database error:", error);
-        return res.status(500).json({ error: "An error occurred while deleting the board." });
+  pool.query(queries.getBoardById, [id], (error, results) => {
+    if (error) {
+      console.error("Database error fetching board:", error);
+      return res.status(500).json({ error: "Database error while fetching board." });
+    }
+
+    if (results.rows.length === 0) {
+      return res.status(404).json({ error: "Board not found." });
+    }
+
+    const board = results.rows[0];
+
+    if (board.ownerid !== req.userId) {
+      return res.status(403).json({ error: "You are not authorized to delete this board." });
+    }
+
+    pool.query(queries.deleteBoard, [id], (deleteErr, deleteResults) => {
+      if (deleteErr) {
+        console.error("Database error deleting board:", deleteErr);
+        return res.status(500).json({ error: "Error deleting board." });
+      }
+
+      if (deleteResults.rowCount === 0) {
+        return res.status(404).json({ error: "Board not found during deletion." });
       }
 
       console.log("Board deleted!");
-      res.status(201).json({ message: "Board deleted successfully." });
-    }
-  );
+      res.status(200).json({ message: "Board deleted successfully." });
+    });
+  });
 };
 
 const deleteUser = (req, res) => {
@@ -321,4 +386,5 @@ module.exports = {
   createBoard,
   deleteBoard,
   deleteUser,
-}
+  editBoard,
+};

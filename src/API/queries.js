@@ -10,6 +10,9 @@ const getUserBoards = "SELECT * FROM notesapp.boards WHERE ownerId = $1";
 const createBoard = "INSERT INTO notesapp.boards (ownerId, name, description, lastUpdated) VALUES ($1, $2, $3, $4)";
 const deleteBoard = "DELETE FROM notesapp.boards WHERE id = $1";
 const deleteBoardsOfUser = "DELETE * FROM notesapp.boards WHERE ownerId = $1";
+const getBoardById = "SELECT * FROM notesapp.boards WHERE id = $1";
+const updateBoard = "UPDATE notesapp.boards SET name = $1, description = $2, lastUpdated = CURRENT_TIMESTAMP WHERE id = $3";
+
 
 //Users
 const getUsers = "SELECT * FROM notesapp.users";
@@ -36,6 +39,8 @@ module.exports = {
     createBoard,
     deleteBoard,
     deleteBoardsOfUser,
+    getBoardById,
+    updateBoard,
 
     getUsers,
     getUserById,
