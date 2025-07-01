@@ -77,7 +77,6 @@ const createAccount = async (req, res) => {
   }
 };
 
-
 const login = (req, res) => {
   const username = req.params.username;
   const { password } = req.body;
@@ -117,7 +116,6 @@ const login = (req, res) => {
   });
 };
 
-
 async function authenticateToken(req, res, next) {
 
   pool.query(
@@ -140,18 +138,37 @@ function generateAccessToken(user) {
 }
 
 const getUserBoards = (req, res) => {
-  const userId = req.user.id;
-  pool.query(queries.getUserBoards, [userId], (error, results) => {
+  const userId = req.body?.userId;
+
+  if (!userId) {
+    return res.status(400).json({ message: "User ID is required" });
+  }
+
+  //Verify user exists
+  pool.query(queries.getUserById, [userId], (error, userResults) => {
     if (error) {
-      console.error(error);
-      return res.status(500).json({ message: "Database error" });
+      console.error("Error checking user existence:", error);
+      return res.status(500).json({ message: "Database error while checking user" });
     }
-    res.status(200).json({
-      user: req.user,
-      boards: results.rows
+
+    if (userResults.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    //Get boards
+    pool.query(queries.getUserBoards, [userId], (error, boardResults) => {
+      if (error) {
+        console.error("Error retrieving user boards:", error);
+        return res.status(500).json({ message: "Database error while retrieving boards" });
+      }
+
+      res.status(200).json({
+        boards: boardResults.rows,
+      });
     });
   });
 };
+
 
 const createBoard = (req, res) => {
   const { ownerId, name, description } = req.body;
