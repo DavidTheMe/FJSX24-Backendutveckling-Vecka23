@@ -101,9 +101,6 @@ const login = (req, res) => {
     // Generate tokens
     const accessToken = generateAccessToken(user);
 
-    console.log("Logging in")
-    console.log("Access token: " + accessToken);
-
     // Update token in DB
     pool.query(
       queries.updateAccessToken,
@@ -113,17 +110,13 @@ const login = (req, res) => {
           console.error("Error updating refresh token:", error);
           return res.status(500).json({ message: "Database error while updating refresh token" });
         }
-
-        res.json({ accessToken });
+        // Only send success response after token update succeeded
+        return res.status(200).json({ "Successful login!": accessToken });
       }
     );
-
-
-    return res.status(200).json({ "Successful login!": accessToken });
-
-
   });
 };
+
 
 async function authenticateToken(req, res, next) {
 
