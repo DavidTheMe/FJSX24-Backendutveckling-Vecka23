@@ -6,6 +6,7 @@ const client = require('../../db');
 
 const jwt = require('jsonwebtoken');
 
+
 const getUsers = (req, res) => {
   pool.query(queries.getUsers, (error, results) => {
     if (error) {
@@ -117,21 +118,97 @@ const login = (req, res) => {
 };
 
 async function authenticateToken(req, res, next) {
+  try {
+    const authHeader = req.headers['authorization'];
+    const tokenFromHeader = authHeader && authHeader.split(' ')[1];
 
-  pool.query(
-    queries.updateAccessToken,
-    [refreshToken, user.id],
-    (error, results) => {
-      if (error) {
-        console.error("Error updating refresh token:", error);
-        return res.status(500).json({ message: "Database error while updating refresh token" });
-      }
-
-      res.json({ accessToken, refreshToken });
+    if (!tokenFromHeader) {
+      return res.status(401).json({ message: "Access token required" });
     }
-  );
 
-};
+    // Check if it's valid (not expired)
+    jwt.verify(tokenFromHeader, process.env.ACCESS_TOKEN_SECRET, (err, decodedUser) => {
+      if (!err) {
+        // Valid token
+        const userId = decodedUser.id;
+        pool.query(queries.getAccessToken, [userId], (dbErr, results) => {
+          if (dbErr) {
+            console.error("Database error while checking access token:", dbErr);
+            return res.status(500).json({ message: "Database error while verifying access token" });
+          }
+
+          if (results.rows.length === 0) {
+            return res.status(404).json({ message: "Access token not found" });
+          }
+
+          const accessTokenInDB = results.rows[0].accesstoken;
+
+          if (accessTokenInDB !== tokenFromHeader) {
+            return res.status(403).json({ message: "Access token mismatch" });
+          }
+
+          console.log("Access token verified");
+          next();
+        });
+      } else if (err.name === "TokenExpiredError") {
+        // Expired token: decode to get userId
+        const decoded = jwt.decode(tokenFromHeader);
+        if (!decoded || !decoded.id) {
+          return res.status(400).json({ message: "Invalid token payload" });
+        }
+
+        const userId = decoded.id;
+
+        // Retrieve token in DB and verify it matches (single-use renewal)
+        pool.query(queries.getAccessToken, [userId], (dbErr, results) => {
+          if (dbErr) {
+            console.error("Database error while checking access token:", dbErr);
+            return res.status(500).json({ message: "Database error while verifying expired token" });
+          }
+
+          if (results.rows.length === 0) {
+            return res.status(404).json({ message: "Access token not found" });
+          }
+
+          const accessTokenInDB = results.rows[0].accesstoken;
+
+          if (accessTokenInDB !== tokenFromHeader) {
+            return res.status(403).json({ message: "Expired token mismatch or already used" });
+          }
+
+          // Generate new token
+          const newToken = generateAccessToken({ id: userId });
+
+          // Update DB with new token
+          pool.query(
+            queries.updateAccessToken,
+            [newToken, userId],
+            (updateErr) => {
+              if (updateErr) {
+                console.error("Error updating access token:", updateErr);
+                return res.status(500).json({ message: "Failed to update access token" });
+              }
+
+              console.log("Expired token used once to issue new token.");
+
+              return res.status(200).json({
+                message: "Access token expired. New token issued.",
+                accessToken: newToken
+              });
+            }
+          );
+        });
+      } else {
+        console.error("JWT verification error:", err);
+        return res.status(403).json({ message: "Invalid access token" });
+      }
+    });
+  } catch (error) {
+    console.error("Unexpected error in authenticateToken:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+}
+
 
 function generateAccessToken(user) {
   return jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '15s' })

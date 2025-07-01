@@ -21,7 +21,7 @@ const deleteUser = "DELETE FROM notesapp.users WHERE id = $1";
 //authentication
 const createAccessTokenEntry = "INSERT INTO notesapp.accesstokens (ownerId) VALUES ($1)"
 const updateAccessToken = 'UPDATE notesapp.accesstokens SET accesstoken = $1 WHERE ownerId = $2';
-const getRefreshToken = 'SELECT refreshtoken FROM notesapp.refreshtokens WHERE ownerId = $1';
+const getAccessToken = 'SELECT accesstoken FROM notesapp.accesstokens WHERE ownerId = $1';
 
 
 
@@ -45,5 +45,5 @@ module.exports = {
 
     createAccessTokenEntry,
     updateAccessToken,
-    getRefreshToken,
+    getAccessToken,
 };

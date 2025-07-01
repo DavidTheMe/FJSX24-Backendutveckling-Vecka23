@@ -14,7 +14,7 @@ router.delete("/api/users/:id", controller.authenticateToken, controller.deleteU
 module.exports = router;
 
 // /api/notes 	GET 	Hämta anteckningar
-router.get("/api/boards", /*controller.authenticateToken,*/ controller.getUserBoards);
+router.get("/api/boards", controller.authenticateToken, controller.getUserBoards);
 
 // /api/notes 	POST 	Spara en anteckning
 router.post("/api/boards", /*controller.authenticateToken,*/ controller.createBoard);
