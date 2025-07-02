@@ -66,7 +66,7 @@ const createAccount = async (req, res) => {
 
     console.log("Account and access token table entry created!");
 
-    res.status(200).json({
+    res.status(201).json({
       message: "Account created!",
       userId,
     });
@@ -214,11 +214,7 @@ function generateAccessToken(user) {
 }
 
 const getUserBoards = (req, res) => {
-  const userId = req.body?.userId;
-
-  if (!userId) {
-    return res.status(400).json({ message: "User ID is required" });
-  }
+  const userId = req.userId;
 
   pool.query(queries.getUserById, [userId], (error, userResults) => {
     if (error) {
@@ -243,6 +239,7 @@ const getUserBoards = (req, res) => {
   });
 };
 
+
 const createBoard = (req, res) => {
   const { ownerId, name, description } = req.body;
 
@@ -259,7 +256,7 @@ const createBoard = (req, res) => {
 
   pool.query(
     queries.createBoard,
-    [ownerId, name, description, currentTime],
+    [ownerId, name, description, currentTime, currentTime],
     (error, results) => {
       if (error) {
         console.error("Database error:", error);

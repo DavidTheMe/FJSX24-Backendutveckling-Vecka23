@@ -7,7 +7,7 @@ const deleteNotesOfBoard = "DELETE * FROM notesapp.boards WHERE boardId = $1";
 
 //Boards
 const getUserBoards = "SELECT * FROM notesapp.boards WHERE ownerId = $1";
-const createBoard = "INSERT INTO notesapp.boards (ownerId, name, description, lastUpdated) VALUES ($1, $2, $3, $4)";
+const createBoard = "INSERT INTO notesapp.boards (ownerId, name, description, lastUpdated, createdat) VALUES ($1, $2, $3, $4, $5)";
 const deleteBoard = "DELETE FROM notesapp.boards WHERE id = $1";
 const deleteBoardsOfUser = "DELETE * FROM notesapp.boards WHERE ownerId = $1";
 const getBoardById = "SELECT * FROM notesapp.boards WHERE id = $1";
